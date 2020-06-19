@@ -58,8 +58,8 @@ netease_comment: false
 # gitment settings
 gitment_username: comment-jason
 gitment_repo: caesarlinsa.github.io
-gitment_client_id: 7c17272086c9500761b4
-gitment_client_secret: 13483e7bdf341022693024ddd4241389fc58ec24
+gitment_client_id: 31174784e1b6f66cb147
+gitment_client_secret: ccf76a9f1581c597d0b6c8a072311c1be74842d1
 
 
 # Analytics settings
