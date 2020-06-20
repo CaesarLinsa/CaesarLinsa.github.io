@@ -1,6 +1,6 @@
 # 李成石的个人博客
 
-### [我的博客&rarr;](http://caesarlinsa.github.io)
+### [我的博客](http://caesarlinsa.github.io)
 
 李成石的个人博客，使用的是Jekyll主题
 

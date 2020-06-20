@@ -56,10 +56,10 @@ kramdown:
 netease_comment: false
 
 # gitment settings
-gitment_username: comment-jason
-gitment_repo: caesarlinsa.github.io
-gitment_client_id: 7c17272086c9500761b4
-gitment_client_secret: 13483e7bdf341022693024ddd4241389fc58ec24
+#gitment_username: CaesarLinsa
+#gitment_repo: CaesarLinsa.github.io
+#gitment_client_id: 5266583bcb840aa1adf9
+#gitment_client_secret: 37a0c28874fb6d894c5d69a349bc1d5a62bc2e0d
 
 
 # Analytics settings
