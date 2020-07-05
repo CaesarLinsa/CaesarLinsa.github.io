@@ -22,10 +22,14 @@ class RabbitDriver(amqpdriver.AMQPDriverBase):
         conf.register_opts(rabbit_opts)
         conf.register_opts(rpc_amqp.amqp_opts)
         # koubu操作的Connection
+        
         # 与ConnectionContext继承的common.py中Connection不同
+        
         connection_pool = rpc_amqp.get_connection_pool(conf, Connection)
         # 此处连接池中为Connection，调用其get方法，便会返回一个连接对象，
+        
         # 配置rpc_conn_pool_size，定义其大小
+        
         super(RabbitDriver, self).__init__(conf, connection_pool,
                                            url, default_exchange,
                                            allowed_remote_exmods)
@@ -62,16 +66,22 @@ def _send(self, target, ctxt, message,
 
     try:
         # ConnectionContext对象对Connection对象进行代理
+        
         # 在__enter__方法中返回self
+        
         with self._get_connection() as conn:
             if target.fanout:
+            
                 # 此处调用其get方法时，完成代理，发送fanout消息
+                
                 conn.fanout_send(target.topic, msg)
             else:
                 topic = target.topic
                 if target.server:
                     topic = '%s.%s' % (target.topic, target.server)
-                # 此处调用其get方法时，完成代理，发送消息到匹配topic   
+                    
+                # 此处调用其get方法时，完成代理，发送消息到匹配topic
+                
                 conn.topic_send(topic, msg, timeout=timeout)
         if wait_for_reply:
             result = self._waiter.wait(msg_id, timeout)
@@ -84,19 +94,22 @@ def _send(self, target, ctxt, message,
 ```
 代码的实现，在其`__getattr__`中，
 ```python
-    def __getattr__(self, key):
-        """Proxy all other calls to the Connection instance."""
-        if self.connection:
-            # self.connection数据库连接对象
-            return getattr(self.connection, key)
-        else:
-            raise rpc_common.InvalidRPCConnectionReuse()
+def __getattr__(self, key):
+    """Proxy all other calls to the Connection instance."""
+    if self.connection:
+    
+        # self.connection数据库连接对象
+        
+        return getattr(self.connection, key)
+    else:
+        raise rpc_common.InvalidRPCConnectionReuse()
 ```
 ### 对资源池进行管理
 如下所示，获取连接池，连接池中每个对象存入双向队列
 ```python
 def get_connection_pool(conf, connection_cls):
     # 加锁
+    
     with _pool_create_sem:
         # Make sure only one thread tries to create the connection pool.
         if not connection_cls.pool:
@@ -122,12 +135,16 @@ class Pool(object):
         self._max_size = max_size
         self._current_size = 0
         self._cond = threading.Condition()
+        
         # 双向队列，默认右边插入
+        
         self._items = collections.deque()
 
     def put(self, item):
         """Return an item to the pool."""
+        
         # 放回资源池
+        
         with self._cond:
             self._items.appendleft(item)
             self._cond.notify()
@@ -138,6 +155,7 @@ class Pool(object):
         This may cause the calling thread to block.
         """
         # 进入获取线程锁，退出释放锁
+        
         with self._cond:
             while True:
                 try:
@@ -152,14 +170,17 @@ class Pool(object):
                 # FIXME(markmc): timeout needed to allow keyboard interrupt
                 # http://bugs.python.org/issue8844
                 # 若无空闲资源，则等待
+                
                 self._cond.wait(timeout=1)
 
         # We've grabbed a slot and dropped the lock, now do the creation
         try:
             # 创建一个资源
+            
             return self.create()
         except Exception:
             # 出错时，资源池数量恢复到创建前
+            
             with self._cond:
                 self._current_size -= 1
             raise
@@ -173,8 +194,10 @@ def _done(self):
     """
     if self.connection:
         # 是否使用资源池存储
+        
         if self.pooled:
             # 支持放回资源池
+            
             # Reset the connection so it's ready for the next caller
             # to grab from the pool
             self.connection.reset()
@@ -182,8 +205,10 @@ def _done(self):
         else:
             try:
                 # 不支持则关闭连接
+                
                 self.connection.close()
             except Exception:
                 pass
         self.connection = None
 ```
+查看Transport.py文件，在使用dirver提供的四种方法，建立新方法，这些方法完全可以创建起来server.py和Client对象。
