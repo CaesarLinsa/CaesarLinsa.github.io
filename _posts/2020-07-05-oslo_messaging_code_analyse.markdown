@@ -40,6 +40,7 @@ def _send(self, target, ctxt, message,
           wait_for_reply=None, timeout=None, envelope=True):
 
     # FIXME(markmc): remove this temporary hack
+    
     class Context(object):
         def __init__(self, d):
             self.d = d
@@ -111,7 +112,9 @@ def get_connection_pool(conf, connection_cls):
     # 加锁
     
     with _pool_create_sem:
+    
         # Make sure only one thread tries to create the connection pool.
+        
         if not connection_cls.pool:
             connection_cls.pool = ConnectionPool(conf, connection_cls)
     return connection_cls.pool
