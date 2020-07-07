@@ -173,6 +173,38 @@
             ">
     			
 <div class="post-preview">
+    <a href="/2020/07/07/example_for_oslo_messaging_usage/">
+        <h2 class="post-title">
+            oslo.messaging RPC举例
+        </h2>
+        
+        <h3 class="post-subtitle">
+            example for oslo.messaging usage
+        </h3>
+        
+        <div class="post-content-preview">
+            配置文件
+配置rabbit的ip和port，userid和password，如下是部署rabbitmq的主机
+[DEFAULT]
+rabbit_host=196.168.1.120
+rabbit_port=5672
+rabbit_use_ssl=false
+rabbit_userid=guest
+rabbit_password=guest
+
+注意DEFAULT为大写，否则无法加载
+
+服务端
+...
+        </div>
+    </a>
+    <p class="post-meta">
+        Posted by Caesar on July 7, 2020
+    </p>
+</div>
+<hr>
+
+<div class="post-preview">
     <a href="/2020/07/05/oslo_messaging_code_analyse/">
         <h2 class="post-title">
             oslo.messaging Driver分析
@@ -275,6 +307,10 @@ created = db.Column(db.DateTime,  nullable=False, default=datetime.now)
                         
                             
                         
+                            
+                                <a href="/tags/#openstack" title="openstack" rel="2">
+                                    openstack
+                                </a>
                             
                         
                     </div>
