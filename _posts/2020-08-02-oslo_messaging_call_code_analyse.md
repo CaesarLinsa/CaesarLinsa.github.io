@@ -2,7 +2,7 @@
 layout: post
 title: 'oslo.messaging RPC调用分析'
 subtitle:   "oslo.messaging RPC call analyse"
-date:       2020-08-02 16:40:00
+date:       2020-08-01 13:40:00
 author:     "Caesar"
 header-mask: 0.3
 catalog:    true
