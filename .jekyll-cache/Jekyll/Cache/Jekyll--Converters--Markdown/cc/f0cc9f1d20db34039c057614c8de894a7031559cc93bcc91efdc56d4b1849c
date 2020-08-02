@@ -1,0 +1,335 @@
+I"�<h2 id="eventlet">Eventlet</h2>
+<p>文中所有注释见我的<a href="https://github.com/CaesarLinsa/Eventlet">github</a>  <br />
+python中由于使用GIL，每个CPU在同一时间只能执行一个线程。在单进程的多线程下, 即使是多核CPU也仍然是单线程。使用Eventlet协程，可以实现线程中协程调度，
+更重要的是，协程切换，资源消耗比线程小。eventlet依赖greenlet库（C语言协程库，提供python接口），其调度，需要手动switch切换。在eventlet中使用Hub进行调度。</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">BaseHub</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+
+    <span class="n">READ</span> <span class="o">=</span> <span class="n">READ</span>
+    <span class="n">WRITE</span> <span class="o">=</span> <span class="n">WRITE</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">clock</span><span class="o">=</span><span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">listeners</span> <span class="o">=</span> <span class="p">{</span><span class="n">READ</span><span class="p">:{},</span> <span class="n">WRITE</span><span class="p">:{}}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">secondaries</span> <span class="o">=</span> <span class="p">{</span><span class="n">READ</span><span class="p">:{},</span> <span class="n">WRITE</span><span class="p">:{}}</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">clock</span> <span class="o">=</span> <span class="n">clock</span>
+        <span class="c1"># 父协程
+</span>        
+        <span class="bp">self</span><span class="o">.</span><span class="n">greenlet</span> <span class="o">=</span> <span class="n">greenlet</span><span class="o">.</span><span class="n">greenlet</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">run</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stopping</span> <span class="o">=</span> <span class="bp">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">running</span> <span class="o">=</span> <span class="bp">False</span>
+        <span class="c1"># 存储Timers，时间到时，调度子协程
+</span>        
+        <span class="bp">self</span><span class="o">.</span><span class="n">timers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">next_timers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="c1"># 文件读写监听类
+</span>        
+        <span class="bp">self</span><span class="o">.</span><span class="n">lclass</span> <span class="o">=</span> <span class="n">FdListener</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">debug_exceptions</span> <span class="o">=</span> <span class="bp">True</span>
+</code></pre></div></div>
+<h3 id="spawn协程">spawn协程</h3>
+<p>使用spawn创建GreenThread，即greenlet.greenlet协程。</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="kn">import</span> <span class="nn">eventlet</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="k">def</span> <span class="nf">test</span><span class="p">():</span>
+<span class="o">...</span>     <span class="k">print</span><span class="p">(</span><span class="s">"hello world"</span><span class="p">)</span>
+<span class="o">...</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">eventlet</span><span class="o">.</span><span class="n">spawn</span><span class="p">(</span><span class="n">test</span><span class="p">)</span>
+<span class="o">&lt;</span><span class="n">eventlet</span><span class="o">.</span><span class="n">greenthread</span><span class="o">.</span><span class="n">GreenThread</span> <span class="nb">object</span> <span class="n">at</span> <span class="mh">0x000001CD0453B468</span><span class="o">&gt;</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">eventlet</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mf">0.1</span><span class="p">)</span>
+<span class="n">hello</span> <span class="n">world</span>
+<span class="o">&gt;&gt;&gt;</span>
+</code></pre></div></div>
+<p>spawn 创建一个协程，如下: 初始化Hub，创建GreenThread协程，将Hub的协程作为父协程。
+<code class="highlighter-rouge">hub.schedule_call_global</code> 将协程调度方法g.switch(func, args, kargs)注册在hub的next_times中。</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># greenthread.py
+</span>
+<span class="k">def</span> <span class="nf">spawn</span><span class="p">(</span><span class="n">func</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="s">"""Create a greenthread to run ``func(*args, **kwargs)``.  Returns a 
+    :class:`GreenThread` object which you can use to get the results of the 
+    call.
+    
+    Execution control returns immediately to the caller; the created greenthread
+    is merely scheduled to be run at the next available opportunity.  
+    Use :func:`spawn_after` to  arrange for greenthreads to be spawned 
+    after a finite delay.
+    """</span>
+    <span class="n">hub</span> <span class="o">=</span> <span class="n">hubs</span><span class="o">.</span><span class="n">get_hub</span><span class="p">()</span>
+    <span class="c1"># hub.greenlet 父协程
+</span>    
+    <span class="n">g</span> <span class="o">=</span> <span class="n">GreenThread</span><span class="p">(</span><span class="n">hub</span><span class="o">.</span><span class="n">greenlet</span><span class="p">)</span>
+    <span class="c1"># hub中注册self.next_timers(hub初始化时间+ 0，timer对象)
+</span>    
+    <span class="n">hub</span><span class="o">.</span><span class="n">schedule_call_global</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">g</span><span class="o">.</span><span class="n">switch</span><span class="p">,</span> <span class="n">func</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">g</span>
+</code></pre></div></div>
+<p><strong>eventlet.sleep</strong>，释放当前main协程对cpu占用(greenlet默认当前执行环境便是一个main协程)</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># greenthread.py
+</span>
+<span class="k">def</span> <span class="nf">sleep</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+    <span class="s">"""Yield control to another eligible coroutine until at least *seconds* have
+    elapsed.
+
+    *seconds* may be specified as an integer, or a float if fractional seconds
+    are desired. Calling :func:`~greenthread.sleep` with *seconds* of 0 is the
+    canonical way of expressing a cooperative yield. For example, if one is
+    looping over a large list performing an expensive calculation without
+    calling any socket methods, it's a good idea to call ``sleep(0)``
+    occasionally; otherwise nothing else will run.
+    """</span>
+    <span class="c1"># 获取单例的hub对象
+</span>
+    <span class="n">hub</span> <span class="o">=</span> <span class="n">hubs</span><span class="o">.</span><span class="n">get_hub</span><span class="p">()</span>
+    <span class="k">assert</span> <span class="n">hub</span><span class="o">.</span><span class="n">greenlet</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">greenlet</span><span class="o">.</span><span class="n">getcurrent</span><span class="p">(),</span> <span class="s">'do not call blocking functions from the mainloop'</span>
+    <span class="c1"># 注册经过seconds，从父协程切换到main协程的方法
+</span>    
+    <span class="n">timer</span> <span class="o">=</span> <span class="n">hub</span><span class="o">.</span><span class="n">schedule_call_global</span><span class="p">(</span><span class="n">seconds</span><span class="p">,</span> <span class="n">greenlet</span><span class="o">.</span><span class="n">getcurrent</span><span class="p">()</span><span class="o">.</span><span class="n">switch</span><span class="p">)</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="c1"># 调用switch方法（方法会切换到父协程，执行其run方法，遍历调度所有注册的协程方法
+</span>        
+        <span class="n">hub</span><span class="o">.</span><span class="n">switch</span><span class="p">()</span>
+    <span class="k">finally</span><span class="p">:</span>
+        <span class="n">timer</span><span class="o">.</span><span class="n">cancel</span><span class="p">()</span>
+
+</code></pre></div></div>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># hubs/hub.py
+</span>
+<span class="k">def</span> <span class="nf">switch</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="n">cur</span> <span class="o">=</span> <span class="n">greenlet</span><span class="o">.</span><span class="n">getcurrent</span><span class="p">()</span>
+    <span class="k">assert</span> <span class="n">cur</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">greenlet</span><span class="p">,</span> <span class="s">'Cannot switch to MAINLOOP from MAINLOOP'</span>
+    <span class="n">switch_out</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">cur</span><span class="p">,</span> <span class="s">'switch_out'</span><span class="p">,</span> <span class="bp">None</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">switch_out</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">switch_out</span><span class="p">()</span>
+        <span class="k">except</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">squelch_generic_exception</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">exc_info</span><span class="p">())</span>
+            <span class="n">clear_sys_exc_info</span><span class="p">()</span>
+    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">greenlet</span><span class="o">.</span><span class="n">dead</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">greenlet</span> <span class="o">=</span> <span class="n">greenlet</span><span class="o">.</span><span class="n">greenlet</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">run</span><span class="p">)</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">greenlet</span><span class="o">.</span><span class="n">parent</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">cur</span><span class="p">:</span>
+            <span class="n">cur</span><span class="o">.</span><span class="n">parent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">greenlet</span>
+    <span class="k">except</span> <span class="nb">ValueError</span><span class="p">:</span>
+        <span class="k">pass</span>  
+    <span class="c1"># gets raised if there is a greenlet parent cycle
+</span>    
+    <span class="n">clear_sys_exc_info</span><span class="p">()</span>
+    <span class="c1"># 执行self.run，进行调度表
+</span>    
+    <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">greenlet</span><span class="o">.</span><span class="n">switch</span><span class="p">()</span>
+</code></pre></div></div>
+<p>父协程是一个死循环，意味着父协程对子协程调度一直存在。当切换到父协程时（即循环中），便会调度执行注册的子协程（包括sleep时，注册的协程，在等待长时间被切换回main协程，继续向下执行）。
+当main协程结束时，整个程序结束。</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># hubs/hub.py
+</span>
+<span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="s">"""Run the runloop until abort is called.
+    """</span>
+    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">running</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="nb">RuntimeError</span><span class="p">(</span><span class="s">"Already running!"</span><span class="p">)</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">running</span> <span class="o">=</span> <span class="bp">True</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stopping</span> <span class="o">=</span> <span class="bp">False</span>
+        <span class="k">while</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">stopping</span><span class="p">:</span>
+            <span class="c1"># self.timers中注册时间，从小到大进行堆排序
+</span>            
+            <span class="bp">self</span><span class="o">.</span><span class="n">prepare_timers</span><span class="p">()</span>
+            <span class="c1"># self.clock()获取当前时间，通过对比注册协程时间
+</span>            
+            <span class="c1"># 若小于等于则立刻调用，否则退出，等待到时间再调用
+</span>            
+            <span class="bp">self</span><span class="o">.</span><span class="n">fire_timers</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">clock</span><span class="p">())</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">prepare_timers</span><span class="p">()</span>
+            <span class="n">wakeup_when</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sleep_until</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">wakeup_when</span> <span class="ow">is</span> <span class="bp">None</span><span class="p">:</span>
+                <span class="n">sleep_time</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">default_sleep</span><span class="p">()</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">sleep_time</span> <span class="o">=</span> <span class="n">wakeup_when</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">clock</span><span class="p">()</span>
+            <span class="c1"># wait存在注册读写事件时，使用epoll.poll阻塞进程，等待连接接入
+</span>            
+            <span class="c1"># 否则sleep指定时间
+</span>            
+            <span class="k">if</span> <span class="n">sleep_time</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">sleep_time</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">timers</span><span class="p">[:]</span>
+            <span class="k">del</span> <span class="bp">self</span><span class="o">.</span><span class="n">next_timers</span><span class="p">[:]</span>
+    <span class="k">finally</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">running</span> <span class="o">=</span> <span class="bp">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stopping</span> <span class="o">=</span> <span class="bp">False</span>
+
+</code></pre></div></div>
+<h2 id="wsgi-server">WSGI server</h2>
+<p>一个使用WSGI server的例子，如下</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">eventlet</span>
+<span class="kn">from</span> <span class="nn">eventlet</span> <span class="kn">import</span> <span class="n">wsgi</span>
+
+
+<span class="k">def</span> <span class="nf">hello_world</span><span class="p">(</span><span class="n">env</span><span class="p">,</span> <span class="n">start_response</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">env</span><span class="p">[</span><span class="s">'PATH_INFO'</span><span class="p">]</span> <span class="o">!=</span> <span class="s">'/'</span><span class="p">:</span>
+        <span class="n">start_response</span><span class="p">(</span><span class="s">'404 Not Found'</span><span class="p">,</span> <span class="p">[(</span><span class="s">'Content-Type'</span><span class="p">,</span> <span class="s">'text/plain'</span><span class="p">)])</span>
+        <span class="k">return</span> <span class="p">[</span><span class="s">'Not Found</span><span class="se">\r\n</span><span class="s">'</span><span class="p">]</span>
+    <span class="n">start_response</span><span class="p">(</span><span class="s">'200 OK'</span><span class="p">,</span> <span class="p">[(</span><span class="s">'Content-Type'</span><span class="p">,</span> <span class="s">'text/plain'</span><span class="p">)])</span>
+    <span class="k">return</span> <span class="p">[</span><span class="s">'Hello, World!</span><span class="se">\r\n</span><span class="s">'</span><span class="p">]</span>
+
+
+<span class="n">wsgi</span><span class="o">.</span><span class="n">server</span><span class="p">(</span><span class="n">eventlet</span><span class="o">.</span><span class="n">listen</span><span class="p">((</span><span class="s">''</span><span class="p">,</span> <span class="mi">8090</span><span class="p">)),</span> <span class="n">hello_world</span><span class="p">)</span>
+</code></pre></div></div>
+<p><code class="highlighter-rouge">eventlet.listen</code> 创建socket对象，在wsgi.server中，accept接收用户连接。</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># wsgi.py :: server
+</span>
+<span class="c1"># 上略，创建Server(BaseHTTPServer.HTTPServer)和一个协程池（用来处理请求）
+</span>
+<span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="c1"># 此处有魔法
+</span>        
+        <span class="n">client_socket</span> <span class="o">=</span> <span class="n">sock</span><span class="o">.</span><span class="n">accept</span><span class="p">()</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="c1"># 孵化一个请求处理协程，注册在Hub中
+</span>            
+            <span class="n">pool</span><span class="o">.</span><span class="n">spawn_n</span><span class="p">(</span><span class="n">serv</span><span class="o">.</span><span class="n">process_request</span><span class="p">,</span> <span class="n">client_socket</span><span class="p">)</span>
+        <span class="k">except</span> <span class="nb">AttributeError</span><span class="p">:</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s">"wsgi's pool should be an instance of "</span> \
+                <span class="s">"eventlet.greenpool.GreenPool, is </span><span class="si">%</span><span class="s">s. Please convert your"</span>\
+                <span class="s">" call site to use GreenPool instead"</span> <span class="o">%</span> <span class="nb">type</span><span class="p">(</span><span class="n">pool</span><span class="p">),</span>
+                <span class="nb">DeprecationWarning</span><span class="p">,</span> <span class="n">stacklevel</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+            <span class="n">pool</span><span class="o">.</span><span class="n">execute_async</span><span class="p">(</span><span class="n">serv</span><span class="o">.</span><span class="n">process_request</span><span class="p">,</span> <span class="n">client_socket</span><span class="p">)</span>
+    <span class="k">except</span> <span class="n">ACCEPT_EXCEPTIONS</span><span class="p">,</span> <span class="n">e</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">get_errno</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">ACCEPT_ERRNO</span><span class="p">:</span>
+            <span class="k">raise</span>
+    <span class="k">except</span> <span class="p">(</span><span class="nb">KeyboardInterrupt</span><span class="p">,</span> <span class="nb">SystemExit</span><span class="p">):</span>
+        <span class="n">serv</span><span class="o">.</span><span class="n">log</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s">"wsgi exiting</span><span class="se">\n</span><span class="s">"</span><span class="p">)</span>
+        <span class="k">break</span>
+        
+</code></pre></div></div>
+<p><code class="highlighter-rouge">client_socket = sock.accept()</code>是一个魔法方法，非阻塞读取，其内部是一个循环。
+当用户接入时，返回连接对象，否则返回None</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># greenio.py :: GreenSocket
+</span><span class="k">def</span> <span class="nf">accept</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">act_non_blocking</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">fd</span><span class="o">.</span><span class="n">accept</span><span class="p">()</span>
+    <span class="n">fd</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">fd</span>
+    <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+        <span class="c1"># 无用户连接时连接失败，Resource temporarily unavailable，进行trampoline
+</span>        
+        <span class="n">res</span> <span class="o">=</span> <span class="n">socket_accept</span><span class="p">(</span><span class="n">fd</span><span class="p">)</span>
+        <span class="c1"># 用户连接时，res非None，返回type(self)(client), addr
+</span>        
+        <span class="c1"># 从而孵化一个协程。wsgi.py :: server循环，调用sock.accept()，因为无连接返回空，
+</span>        
+        <span class="c1"># 调用trampoline方法，注册读事件和切换main协程方法，其中hub.switch切换到父协程执行刚才孵化的处理请求协程
+</span>        
+        <span class="k">if</span> <span class="n">res</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="n">client</span><span class="p">,</span> <span class="n">addr</span> <span class="o">=</span> <span class="n">res</span>
+            <span class="n">set_nonblocking</span><span class="p">(</span><span class="n">client</span><span class="p">)</span>
+            <span class="k">return</span> <span class="nb">type</span><span class="p">(</span><span class="bp">self</span><span class="p">)(</span><span class="n">client</span><span class="p">),</span> <span class="n">addr</span>
+        <span class="n">trampoline</span><span class="p">(</span><span class="n">fd</span><span class="p">,</span> <span class="n">read</span><span class="o">=</span><span class="bp">True</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gettimeout</span><span class="p">(),</span>
+                       <span class="n">timeout_exc</span><span class="o">=</span><span class="n">socket</span><span class="o">.</span><span class="n">timeout</span><span class="p">(</span><span class="s">"timed out"</span><span class="p">))</span>
+</code></pre></div></div>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># hubs/__init__.py
+</span>
+<span class="k">def</span> <span class="nf">trampoline</span><span class="p">(</span><span class="n">fd</span><span class="p">,</span> <span class="n">read</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="n">write</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> 
+               <span class="n">timeout_exc</span><span class="o">=</span><span class="n">timeout</span><span class="o">.</span><span class="n">Timeout</span><span class="p">):</span>
+    <span class="s">"""Suspend the current coroutine until the given socket object or file
+    descriptor is ready to *read*, ready to *write*, or the specified
+    *timeout* elapses, depending on arguments specified.
+
+    To wait for *fd* to be ready to read, pass *read* ``=True``; ready to
+    write, pass *write* ``=True``. To specify a timeout, pass the *timeout*
+    argument in seconds.
+
+    If the specified *timeout* elapses before the socket is ready to read or
+    write, *timeout_exc* will be raised instead of ``trampoline()``
+    returning normally.
+    
+    .. note :: |internal|
+    """</span>
+    <span class="n">t</span> <span class="o">=</span> <span class="bp">None</span>
+    <span class="n">hub</span> <span class="o">=</span> <span class="n">get_hub</span><span class="p">()</span>
+    <span class="n">current</span> <span class="o">=</span> <span class="n">greenlet</span><span class="o">.</span><span class="n">getcurrent</span><span class="p">()</span>
+    <span class="k">assert</span> <span class="n">hub</span><span class="o">.</span><span class="n">greenlet</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">current</span><span class="p">,</span> <span class="s">'do not call blocking functions from the mainloop'</span>
+    <span class="k">assert</span> <span class="ow">not</span> <span class="p">(</span><span class="n">read</span> <span class="ow">and</span> <span class="n">write</span><span class="p">),</span> <span class="s">'not allowed to trampoline for reading and writing'</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">fileno</span> <span class="o">=</span> <span class="n">fd</span><span class="o">.</span><span class="n">fileno</span><span class="p">()</span>
+    <span class="k">except</span> <span class="nb">AttributeError</span><span class="p">:</span>
+        <span class="n">fileno</span> <span class="o">=</span> <span class="n">fd</span>
+    <span class="k">if</span> <span class="n">timeout</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span>
+        <span class="n">t</span> <span class="o">=</span> <span class="n">hub</span><span class="o">.</span><span class="n">schedule_call_global</span><span class="p">(</span><span class="n">timeout</span><span class="p">,</span> <span class="n">current</span><span class="o">.</span><span class="n">throw</span><span class="p">,</span> <span class="n">timeout_exc</span><span class="p">)</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">read</span><span class="p">:</span>
+            <span class="c1"># 注册读监听（此处是"main"协程), 用于跳出父协程, 切换回"main"协程
+</span>            
+            <span class="c1"># 在epoll多路复用时，一旦监听到读事件
+</span>            
+            <span class="c1"># 执行current.switch切换到hub 父协程的switch方法，到run方法
+</span>            
+            <span class="n">listener</span> <span class="o">=</span> <span class="n">hub</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">hub</span><span class="o">.</span><span class="n">READ</span><span class="p">,</span> <span class="n">fileno</span><span class="p">,</span> <span class="n">current</span><span class="o">.</span><span class="n">switch</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">write</span><span class="p">:</span>
+            <span class="n">listener</span> <span class="o">=</span> <span class="n">hub</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">hub</span><span class="o">.</span><span class="n">WRITE</span><span class="p">,</span> <span class="n">fileno</span><span class="p">,</span> <span class="n">current</span><span class="o">.</span><span class="n">switch</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="c1"># 调用hub的switch，到父协程的run方法
+</span>            
+            <span class="c1"># 从而父协程进行调度
+</span>            
+            <span class="k">return</span> <span class="n">hub</span><span class="o">.</span><span class="n">switch</span><span class="p">()</span>
+        <span class="k">finally</span><span class="p">:</span>
+        <span class="c1"># 读事件时，切换"mian"协程到此处
+</span>        
+            <span class="n">hub</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">listener</span><span class="p">)</span>
+    <span class="k">finally</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">t</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="n">t</span><span class="o">.</span><span class="n">cancel</span><span class="p">()</span>
+</code></pre></div></div>
+<p>hub.switch和run方法见上spawn中所示，对子协程调度完成后，调用wait方法。
+父协程<code class="highlighter-rouge">self.poll.poll</code>等待用户连接(读事件)，建立后，在<code class="highlighter-rouge">readers.get(fileno, noop).cb(fileno)</code>
+切回main协程的<strong>trampoline</strong> <code class="highlighter-rouge">finally</code>方法，执行完成后，accept循环继续调用，建立连接。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># hubs/poll.py
+</span>
+<span class="k">def</span> <span class="nf">wait</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">seconds</span><span class="o">=</span><span class="bp">None</span><span class="p">):</span>
+    <span class="n">readers</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">listeners</span><span class="p">[</span><span class="n">READ</span><span class="p">]</span>
+    <span class="n">writers</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">listeners</span><span class="p">[</span><span class="n">WRITE</span><span class="p">]</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">readers</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">writers</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">seconds</span><span class="p">:</span>
+            <span class="n">sleep</span><span class="p">(</span><span class="n">seconds</span><span class="p">)</span>
+        <span class="k">return</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="c1"># 阻塞，等待读事件
+</span>        
+        <span class="n">presult</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">poll</span><span class="o">.</span><span class="n">poll</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">seconds</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">WAIT_MULTIPLIER</span><span class="p">))</span>
+    <span class="k">except</span> <span class="n">select</span><span class="o">.</span><span class="n">error</span><span class="p">,</span> <span class="n">e</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">get_errno</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">==</span> <span class="n">errno</span><span class="o">.</span><span class="n">EINTR</span><span class="p">:</span>
+            <span class="k">return</span>
+        <span class="k">raise</span>
+    <span class="n">SYSTEM_EXCEPTIONS</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">SYSTEM_EXCEPTIONS</span>
+
+    <span class="k">for</span> <span class="n">fileno</span><span class="p">,</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">presult</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">event</span> <span class="o">&amp;</span> <span class="n">READ_MASK</span><span class="p">:</span>
+                <span class="c1"># current.switch 此处切回"main"协程
+</span>                <span class="n">readers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">fileno</span><span class="p">,</span> <span class="n">noop</span><span class="p">)</span><span class="o">.</span><span class="n">cb</span><span class="p">(</span><span class="n">fileno</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">event</span> <span class="o">&amp;</span> <span class="n">WRITE_MASK</span><span class="p">:</span>
+                <span class="n">writers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">fileno</span><span class="p">,</span> <span class="n">noop</span><span class="p">)</span><span class="o">.</span><span class="n">cb</span><span class="p">(</span><span class="n">fileno</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">event</span> <span class="o">&amp;</span> <span class="n">select</span><span class="o">.</span><span class="n">POLLNVAL</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">remove_descriptor</span><span class="p">(</span><span class="n">fileno</span><span class="p">)</span>
+                <span class="k">continue</span>
+            <span class="k">if</span> <span class="n">event</span> <span class="o">&amp;</span> <span class="n">EXC_MASK</span><span class="p">:</span>
+                <span class="n">readers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">fileno</span><span class="p">,</span> <span class="n">noop</span><span class="p">)</span><span class="o">.</span><span class="n">cb</span><span class="p">(</span><span class="n">fileno</span><span class="p">)</span>
+                <span class="n">writers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">fileno</span><span class="p">,</span> <span class="n">noop</span><span class="p">)</span><span class="o">.</span><span class="n">cb</span><span class="p">(</span><span class="n">fileno</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">SYSTEM_EXCEPTIONS</span><span class="p">:</span>
+            <span class="k">raise</span>
+        <span class="k">except</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">squelch_exception</span><span class="p">(</span><span class="n">fileno</span><span class="p">,</span> <span class="n">sys</span><span class="o">.</span><span class="n">exc_info</span><span class="p">())</span>
+            <span class="n">clear_sys_exc_info</span><span class="p">()</span>
+
+</code></pre></div></div>
+<p>建立连接，孵化协程。accept循环调用，socket_accept(fd)返回None，从而<strong>trampoline</strong> 中hub.switch切换父协程处理。
+如此每次请求，完成一次<code class="highlighter-rouge">父协程--&gt;main协程--&gt;父协程</code>。  <br />
+总而言之，main协程建立用户连接，孵化出子协程，然后切换回父协程处理，父协程处理完成后，等待用户连接后，切换到main协程进行建立连接，孵化子协程，切换父协程处理</p>
+
+:ET

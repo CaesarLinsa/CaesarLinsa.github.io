@@ -1,0 +1,23 @@
+I"�<h2 id="打包">打包</h2>
+<p>实验代码是最简单的flask工程，”/”, render_template到hello.html.
+hello.html中渲染”hello world”
+使用<code class="highlighter-rouge">pyinstaller -F app.py --name app</code> 对服务进行打包，在dist中发现app.exe文件
+但是执行时，出现如下错误</p>
+
+<p><img src="\img\package_flask\\package_error.png" alt="package_call_error" /></p>
+
+<p>搜索问题的答案[stackoverflow] (https://stackoverflow.com/questions/32149892/flask-application-built-using-pyinstaller-not-rendering-index-html/48976223#48976223)</p>
+
+<h2 id="修改">修改</h2>
+<p>添加如下代码在flask入口最上面的import下，sys._MEIPASS是打包目录</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">if</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">sys</span><span class="p">,</span> <span class="s">'frozen'</span><span class="p">,</span> <span class="bp">False</span><span class="p">):</span>
+  <span class="n">template_folder</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">_MEIPASS</span><span class="p">,</span> <span class="s">'templates'</span><span class="p">)</span>
+  <span class="n">app</span> <span class="o">=</span> <span class="n">Flask</span><span class="p">(</span><span class="n">__name__</span><span class="p">,</span> <span class="n">template_folder</span><span class="o">=</span><span class="n">template_folder</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+  <span class="n">app</span> <span class="o">=</span> <span class="n">Flask</span><span class="p">(</span><span class="n">__name__</span><span class="p">)</span>
+</code></pre></div></div>
+<p>执行<code class="highlighter-rouge"> pyinstaller  -F --add-data "templates;templates"  app.py</code> 进行打包。
+打包完成后，执行dist下app.exe，发送请求,执行成功</p>
+
+<p><img src="\img\package_flask\\hello_world.png" alt="hello_world" /></p>
+:ET

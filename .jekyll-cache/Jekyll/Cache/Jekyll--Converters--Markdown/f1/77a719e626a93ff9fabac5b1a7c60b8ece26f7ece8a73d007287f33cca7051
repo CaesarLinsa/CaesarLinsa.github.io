@@ -1,0 +1,26 @@
+I"
+<h2 id="问题">问题</h2>
+<p>在flask-sqlachemy中，使用sqlachemy创建created字段</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">created</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">Column</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">DateTime</span><span class="p">,</span>  <span class="n">nullable</span><span class="o">=</span><span class="bp">False</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">)</span>
+</code></pre></div></div>
+<p>但是页面上读取数据库存入时间是</p>
+
+<p><img src="/img/in-post/Flask-Sqlachemy-Time/1593436434901.png" alt="错误时间" /></p>
+
+<h2 id="修改">修改</h2>
+<p>查询数据类型，Datetime是肯定带毫秒，除非使用String，存储时将当前时间格式化后存储。</p>
+
+<p><img src="/img/in-post/Flask-Sqlachemy-Time/1593438899112.png" alt="数据模型" />
+简单做法是定义jinja2中过滤方法，如下</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">@</span><span class="n">app</span><span class="o">.</span><span class="n">template_filter</span><span class="p">(</span><span class="s">'strftime'</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">datetime_format</span><span class="p">(</span><span class="n">date</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">date</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s">"</span><span class="si">%</span><span class="s">Y-</span><span class="si">%</span><span class="s">m-</span><span class="si">%</span><span class="s">d </span><span class="si">%</span><span class="s">H:</span><span class="si">%</span><span class="s">M:</span><span class="si">%</span><span class="s">S"</span><span class="p">)</span>
+</code></pre></div></div>
+<p>在html中使用<code class="highlighter-rouge">strftime</code></p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>&lt;span&gt;作者:\{\{ article.user.name \}\}&lt;/span&gt; &lt;span&gt;发表日期:\{\{ article.created | strftime \}\}&lt;/span&gt;
+</code></pre></div></div>
+<p>效果如下：</p>
+
+<p><img src="/img/in-post/Flask-Sqlachemy-Time/1593442644149.png" alt="正确时间" /></p>
+
+:ET

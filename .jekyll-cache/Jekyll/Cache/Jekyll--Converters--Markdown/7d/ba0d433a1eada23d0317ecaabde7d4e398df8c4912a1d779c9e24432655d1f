@@ -1,0 +1,74 @@
+I"�<h2 id="配置文件">配置文件</h2>
+<p>配置rabbit的ip和port，userid和password，如下是部署rabbitmq的主机</p>
+<div class="highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[DEFAULT]
+rabbit_host=196.168.1.120
+rabbit_port=5672
+rabbit_use_ssl=false
+rabbit_userid=guest
+rabbit_password=guest
+</code></pre></div></div>
+<p>注意DEFAULT为大写，否则无法加载</p>
+
+<h2 id="服务端">服务端</h2>
+<p>服务端ip 196.168.1.120</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">oslo.config</span> <span class="kn">import</span> <span class="n">cfg</span>
+<span class="kn">import</span> <span class="nn">oslo.messaging</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">time</span>
+
+<span class="n">argv</span> <span class="o">=</span> <span class="n">sys</span><span class="o">.</span><span class="n">argv</span>
+<span class="n">CONF</span> <span class="o">=</span> <span class="n">cfg</span><span class="o">.</span><span class="n">CONF</span>
+<span class="n">CONF</span><span class="p">(</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">:])</span>
+
+
+<span class="k">class</span> <span class="nc">TestEndPoint</span><span class="p">():</span>
+
+    <span class="k">def</span> <span class="nf">test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="n">ctxt</span><span class="p">):</span>
+        <span class="k">return</span> <span class="s">"from server"</span>
+
+<span class="c1"># 此时为endpoint实例化的对象
+</span>
+<span class="n">endpoints</span> <span class="o">=</span> <span class="p">[</span><span class="n">TestEndPoint</span><span class="p">(),</span> <span class="p">]</span>
+
+<span class="n">tansport</span> <span class="o">=</span> <span class="n">oslo</span><span class="o">.</span><span class="n">messaging</span><span class="o">.</span><span class="n">get_transport</span><span class="p">(</span><span class="n">CONF</span><span class="p">)</span>
+<span class="n">target</span> <span class="o">=</span> <span class="n">oslo</span><span class="o">.</span><span class="n">messaging</span><span class="o">.</span><span class="n">Target</span><span class="p">(</span><span class="n">topic</span><span class="o">=</span><span class="s">"rpc"</span><span class="p">,</span> <span class="n">server</span><span class="o">=</span><span class="s">"server"</span><span class="p">)</span>
+<span class="n">server</span> <span class="o">=</span> <span class="n">oslo</span><span class="o">.</span><span class="n">messaging</span><span class="o">.</span><span class="n">get_rpc_server</span><span class="p">(</span><span class="n">tansport</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">endpoints</span><span class="p">,</span> <span class="n">executor</span><span class="o">=</span><span class="s">"blocking"</span><span class="p">)</span>
+
+<span class="n">server</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
+
+<span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+    <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+<span class="n">server</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+
+<span class="n">server</span><span class="o">.</span><span class="n">wait</span><span class="p">()</span>
+</code></pre></div></div>
+<h2 id="客户端">客户端</h2>
+<p>客户端196.168.1.124</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">oslo.config</span> <span class="kn">import</span> <span class="n">cfg</span>
+<span class="kn">import</span> <span class="nn">oslo.messaging</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+
+<span class="n">argv</span> <span class="o">=</span> <span class="n">sys</span><span class="o">.</span><span class="n">argv</span>
+<span class="n">CONF</span><span class="o">=</span><span class="n">cfg</span><span class="o">.</span><span class="n">CONF</span>
+<span class="n">CONF</span><span class="p">(</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">:])</span>
+
+<span class="n">transport</span> <span class="o">=</span> <span class="n">oslo</span><span class="o">.</span><span class="n">messaging</span><span class="o">.</span><span class="n">get_transport</span><span class="p">(</span><span class="n">CONF</span><span class="p">)</span>
+<span class="n">target</span> <span class="o">=</span> <span class="n">oslo</span><span class="o">.</span><span class="n">messaging</span><span class="o">.</span><span class="n">Target</span><span class="p">(</span><span class="n">topic</span><span class="o">=</span><span class="s">"rpc"</span><span class="p">,</span> <span class="n">server</span><span class="o">=</span><span class="s">"server"</span><span class="p">)</span>
+<span class="n">RPCClient</span> <span class="o">=</span> <span class="n">oslo</span><span class="o">.</span><span class="n">messaging</span><span class="o">.</span><span class="n">RPCClient</span><span class="p">(</span><span class="n">transport</span><span class="p">,</span> <span class="n">target</span><span class="p">)</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">RPCClient</span><span class="o">.</span><span class="n">call</span><span class="p">({},</span> <span class="s">"test"</span><span class="p">)</span>
+<span class="k">print</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+</code></pre></div></div>
+<h2 id="测试">测试</h2>
+<p>在196.168.1.120上启动server端
+<code class="highlighter-rouge">python rpc_server.py --config-file=rpc_config</code>
+rabbitmq 创建topic，topic.server 2个topic类型队列，Exchange默认openstack，bingding-key和队列名称相同。</p>
+
+<p><img src="\img\oslo_messaging_usage\\list_queues.png" alt="rabbitmq_list_queues" /></p>
+
+<p>客户端发送数据
+<code class="highlighter-rouge">python rpc_client.py --config-file=rpc_config</code>
+发送成功，接收到服务端返回信息
+<img src="\img\oslo_messaging_usage\\client_call_server.png" alt="client_call_server" /></p>
+:ET

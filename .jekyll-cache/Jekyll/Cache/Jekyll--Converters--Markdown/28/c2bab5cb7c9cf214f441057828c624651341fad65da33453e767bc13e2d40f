@@ -1,0 +1,39 @@
+I"b<h2 id="flask反序列化对象">Flask反序列化对象</h2>
+<p>从redis缓存中取出Artcile对象，获取文章对应作者，如下</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">res</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+    <span class="p">{</span>
+        <span class="s">"id"</span><span class="p">:</span> <span class="n">article</span><span class="o">.</span><span class="nb">id</span> <span class="p">,</span>
+        <span class="s">"title"</span><span class="p">:</span> <span class="s">"&lt;a href='</span><span class="si">%</span><span class="s">s' style='cursor:pointer'&gt;</span><span class="si">%</span><span class="s">s&lt;/a&gt;"</span>
+                 <span class="o">%</span> <span class="p">(</span><span class="n">article</span><span class="o">.</span><span class="nb">id</span><span class="p">,</span><span class="n">article</span><span class="o">.</span><span class="n">title</span><span class="p">),</span>
+        <span class="s">"auther"</span><span class="p">:</span> <span class="n">article</span><span class="o">.</span><span class="n">user</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="c1"># 此处异常
+</span>        
+        <span class="s">'edit'</span><span class="p">:</span> <span class="s">"&lt;a href='edit/</span><span class="si">%</span><span class="s">s' style='cursor:pointer' &gt;编辑&lt;a&gt;"</span> <span class="o">%</span> <span class="n">article</span><span class="o">.</span><span class="nb">id</span>
+     <span class="p">}</span>
+</code></pre></div></div>
+<p>Flask反序列化对象时出错<strong>sqlalchemy.orm.exc.DetachedInstanceError</strong>“Parent instance &lt;Article at 0x1a72390e5c8&gt; is not bound to a Session; lazy load operation of attribute ‘user’ cannot proceed”
+<img src="/img/flask_serialize_not_bond_to_session/flask_serialize_not_bond_to_session_error.png" alt="not_bond_error" />
+##原因
+在数据模型中Article和User.id外键关联,sqlachemy默认使用懒加载，不会加载Article关联的user信息。
+当使用session查询数据库时，不会有问题。从缓存中序列化出来的Article对象时，访问user对象时候，使用默认访问数据库的session对象，user未绑定到session，导致查询时失败。</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">Article</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">Model</span><span class="p">):</span>
+    <span class="n">__tablename__</span> <span class="o">=</span> <span class="s">'article'</span>
+    <span class="nb">id</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">Column</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">Integer</span><span class="p">,</span> <span class="n">primary_key</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+    <span class="n">title</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">Column</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">String</span><span class="p">,</span> <span class="n">nullable</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span>
+    <span class="n">body</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">Column</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">String</span><span class="p">,</span> <span class="n">nullable</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span>
+    <span class="n">body_html</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">Column</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">String</span><span class="p">)</span>
+    <span class="n">created</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">Column</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">DateTime</span><span class="p">,</span> <span class="n">nullable</span><span class="o">=</span><span class="bp">False</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">)</span>
+    <span class="c1"># 每篇文章都有一个作者，一一对应关系,在jinja模板中可以使用article.user.name获取用户名
+</span>    
+    <span class="n">auther_id</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">Column</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">Integer</span><span class="p">,</span> <span class="n">db</span><span class="o">.</span><span class="n">ForeignKey</span><span class="p">(</span><span class="s">'user.id'</span><span class="p">))</span>
+    <span class="c1"># 每篇文章可以有n条评论，一对多关系
+</span>    
+    <span class="n">comments</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">relationship</span><span class="p">(</span><span class="s">'Comment'</span><span class="p">,</span> <span class="n">backref</span><span class="o">=</span><span class="s">'article'</span><span class="p">)</span>
+</code></pre></div></div>
+<h2 id="解决方法">解决方法</h2>
+<p>进行缓存时，关联查询user对象(不使用懒加载)，进行存储。</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># articles = Article.query.all()
+</span>
+<span class="n">articles</span> <span class="o">=</span> <span class="n">Article</span><span class="o">.</span><span class="n">query</span><span class="o">.</span><span class="n">options</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">joinedload</span><span class="p">(</span><span class="s">"user"</span><span class="p">))</span><span class="o">.</span><span class="nb">all</span><span class="p">()</span>
+</code></pre></div></div>
+
+:ET

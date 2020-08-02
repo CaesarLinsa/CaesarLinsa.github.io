@@ -1,0 +1,201 @@
+I"�S<h2 id="oslomessaging-driver实现">oslo.messaging driver实现</h2>
+<p>(以rabbitmq实现为例)
+oslo.messaging的dirver，使用ConnectionContext对ConnectionPool(连接池)和rabbitmq连接对象Connection进行管理。</p>
+<h3 id="对数据库connection管理">对数据库connection管理</h3>
+<p>在impl_rabbitmq.py中，定义koubu操作rabbimq连接对象的Connection和RabbitDriver。</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">RabbitDriver</span><span class="p">(</span><span class="n">amqpdriver</span><span class="o">.</span><span class="n">AMQPDriverBase</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">conf</span><span class="p">,</span> <span class="n">url</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="n">default_exchange</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span>
+                 <span class="n">allowed_remote_exmods</span><span class="o">=</span><span class="p">[]):</span>
+        <span class="n">conf</span><span class="o">.</span><span class="n">register_opts</span><span class="p">(</span><span class="n">rabbit_opts</span><span class="p">)</span>
+        <span class="n">conf</span><span class="o">.</span><span class="n">register_opts</span><span class="p">(</span><span class="n">rpc_amqp</span><span class="o">.</span><span class="n">amqp_opts</span><span class="p">)</span>
+        <span class="c1"># koubu操作的Connection
+</span>        
+        <span class="c1"># 与ConnectionContext继承的common.py中Connection不同
+</span>        
+        <span class="n">connection_pool</span> <span class="o">=</span> <span class="n">rpc_amqp</span><span class="o">.</span><span class="n">get_connection_pool</span><span class="p">(</span><span class="n">conf</span><span class="p">,</span> <span class="n">Connection</span><span class="p">)</span>
+        <span class="c1"># 此处连接池中为Connection，调用其get方法，便会返回一个连接对象，
+</span>        
+        <span class="c1"># 配置rpc_conn_pool_size，定义其大小
+</span>        
+        <span class="nb">super</span><span class="p">(</span><span class="n">RabbitDriver</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">__init__</span><span class="p">(</span><span class="n">conf</span><span class="p">,</span> <span class="n">connection_pool</span><span class="p">,</span>
+                                           <span class="n">url</span><span class="p">,</span> <span class="n">default_exchange</span><span class="p">,</span>
+                                           <span class="n">allowed_remote_exmods</span><span class="p">)</span>
+</code></pre></div></div>
+<p>在AMQPDriverBase中，定义_send, listen, get_reply_p, send_notification方法。以_send为例子</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">_send</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">ctxt</span><span class="p">,</span> <span class="n">message</span><span class="p">,</span>
+          <span class="n">wait_for_reply</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="n">envelope</span><span class="o">=</span><span class="bp">True</span><span class="p">):</span>
+
+    <span class="c1"># FIXME(markmc): remove this temporary hack
+</span>    
+    <span class="k">class</span> <span class="nc">Context</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+        <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">d</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">d</span> <span class="o">=</span> <span class="n">d</span>
+
+        <span class="k">def</span> <span class="nf">to_dict</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">d</span>
+
+    <span class="n">context</span> <span class="o">=</span> <span class="n">Context</span><span class="p">(</span><span class="n">ctxt</span><span class="p">)</span>
+    <span class="n">msg</span> <span class="o">=</span> <span class="n">message</span>
+
+    <span class="n">msg_id</span> <span class="o">=</span> <span class="n">uuid</span><span class="o">.</span><span class="n">uuid4</span><span class="p">()</span><span class="o">.</span><span class="nb">hex</span>
+    <span class="n">msg</span><span class="o">.</span><span class="n">update</span><span class="p">({</span><span class="s">'_msg_id'</span><span class="p">:</span> <span class="n">msg_id</span><span class="p">})</span>
+    <span class="n">LOG</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s">'MSG_ID is </span><span class="si">%</span><span class="s">s'</span> <span class="o">%</span> <span class="p">(</span><span class="n">msg_id</span><span class="p">))</span>
+    <span class="n">rpc_amqp</span><span class="o">.</span><span class="n">_add_unique_id</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span>
+    <span class="n">rpc_amqp</span><span class="o">.</span><span class="n">pack_context</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">context</span><span class="p">)</span>
+
+    <span class="n">msg</span><span class="o">.</span><span class="n">update</span><span class="p">({</span><span class="s">'_reply_q'</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_reply_q</span><span class="p">()})</span>
+
+    <span class="k">if</span> <span class="n">envelope</span><span class="p">:</span>
+        <span class="n">msg</span> <span class="o">=</span> <span class="n">rpc_common</span><span class="o">.</span><span class="n">serialize_msg</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">wait_for_reply</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_waiter</span><span class="o">.</span><span class="n">listen</span><span class="p">(</span><span class="n">msg_id</span><span class="p">)</span>
+
+    <span class="k">try</span><span class="p">:</span>
+        <span class="c1"># ConnectionContext对象对Connection对象进行代理
+</span>        
+        <span class="c1"># 在__enter__方法中返回self
+</span>        
+        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_connection</span><span class="p">()</span> <span class="k">as</span> <span class="n">conn</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">target</span><span class="o">.</span><span class="n">fanout</span><span class="p">:</span>
+            
+                <span class="c1"># 此处调用其get方法时，完成代理，发送fanout消息
+</span>                
+                <span class="n">conn</span><span class="o">.</span><span class="n">fanout_send</span><span class="p">(</span><span class="n">target</span><span class="o">.</span><span class="n">topic</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">topic</span> <span class="o">=</span> <span class="n">target</span><span class="o">.</span><span class="n">topic</span>
+                <span class="k">if</span> <span class="n">target</span><span class="o">.</span><span class="n">server</span><span class="p">:</span>
+                    <span class="n">topic</span> <span class="o">=</span> <span class="s">'</span><span class="si">%</span><span class="s">s.</span><span class="si">%</span><span class="s">s'</span> <span class="o">%</span> <span class="p">(</span><span class="n">target</span><span class="o">.</span><span class="n">topic</span><span class="p">,</span> <span class="n">target</span><span class="o">.</span><span class="n">server</span><span class="p">)</span>
+                    
+                <span class="c1"># 此处调用其get方法时，完成代理，发送消息到匹配topic
+</span>                
+                <span class="n">conn</span><span class="o">.</span><span class="n">topic_send</span><span class="p">(</span><span class="n">topic</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="n">timeout</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">wait_for_reply</span><span class="p">:</span>
+            <span class="n">result</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_waiter</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">msg_id</span><span class="p">,</span> <span class="n">timeout</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="nb">Exception</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="n">result</span>
+            <span class="k">return</span> <span class="n">result</span>
+    <span class="k">finally</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">wait_for_reply</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_waiter</span><span class="o">.</span><span class="n">unlisten</span><span class="p">(</span><span class="n">msg_id</span><span class="p">)</span>
+</code></pre></div></div>
+<p>代码的实现，在其<code class="highlighter-rouge">__getattr__</code>中，</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">__getattr__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">):</span>
+    <span class="s">"""Proxy all other calls to the Connection instance."""</span>
+    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">connection</span><span class="p">:</span>
+    
+        <span class="c1"># self.connection数据库连接对象
+</span>        
+        <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">connection</span><span class="p">,</span> <span class="n">key</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="n">rpc_common</span><span class="o">.</span><span class="n">InvalidRPCConnectionReuse</span><span class="p">()</span>
+</code></pre></div></div>
+<h3 id="对资源池进行管理">对资源池进行管理</h3>
+<p>如下所示，获取连接池，连接池中每个对象存入双向队列</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">get_connection_pool</span><span class="p">(</span><span class="n">conf</span><span class="p">,</span> <span class="n">connection_cls</span><span class="p">):</span>
+    <span class="c1"># 加锁
+</span>    
+    <span class="k">with</span> <span class="n">_pool_create_sem</span><span class="p">:</span>
+    
+        <span class="c1"># Make sure only one thread tries to create the connection pool.
+</span>        
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">connection_cls</span><span class="o">.</span><span class="n">pool</span><span class="p">:</span>
+            <span class="n">connection_cls</span><span class="o">.</span><span class="n">pool</span> <span class="o">=</span> <span class="n">ConnectionPool</span><span class="p">(</span><span class="n">conf</span><span class="p">,</span> <span class="n">connection_cls</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">connection_cls</span><span class="o">.</span><span class="n">pool</span>
+</code></pre></div></div>
+<p>数据库连接池继承下面的pool，实现create方法，如此每次需要时候，从资源池获取一个。</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">@</span><span class="n">six</span><span class="o">.</span><span class="n">add_metaclass</span><span class="p">(</span><span class="n">abc</span><span class="o">.</span><span class="n">ABCMeta</span><span class="p">)</span>
+<span class="k">class</span> <span class="nc">Pool</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+
+    <span class="s">"""A thread-safe object pool.
+
+    Modelled after the eventlet.pools.Pool interface, but designed to be safe
+    when using native threads without the GIL.
+
+    Resizing is not supported.
+    """</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">max_size</span><span class="o">=</span><span class="mi">4</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">Pool</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">__init__</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_max_size</span> <span class="o">=</span> <span class="n">max_size</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_current_size</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_cond</span> <span class="o">=</span> <span class="n">threading</span><span class="o">.</span><span class="n">Condition</span><span class="p">()</span>
+        
+        <span class="c1"># 双向队列，默认右边插入
+</span>        
+        <span class="bp">self</span><span class="o">.</span><span class="n">_items</span> <span class="o">=</span> <span class="n">collections</span><span class="o">.</span><span class="n">deque</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">put</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">item</span><span class="p">):</span>
+        <span class="s">"""Return an item to the pool."""</span>
+        
+        <span class="c1"># 放回资源池
+</span>        
+        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cond</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_items</span><span class="o">.</span><span class="n">appendleft</span><span class="p">(</span><span class="n">item</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_cond</span><span class="o">.</span><span class="n">notify</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">get</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="s">"""Return an item from the pool, when one is available.
+
+        This may cause the calling thread to block.
+        """</span>
+        <span class="c1"># 进入获取线程锁，退出释放锁
+</span>        
+        <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cond</span><span class="p">:</span>
+            <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_items</span><span class="o">.</span><span class="n">popleft</span><span class="p">()</span>
+                <span class="k">except</span> <span class="nb">IndexError</span><span class="p">:</span>
+                    <span class="k">pass</span>
+
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_current_size</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">_max_size</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">_current_size</span> <span class="o">+=</span> <span class="mi">1</span>
+                    <span class="k">break</span>
+
+                <span class="c1"># FIXME(markmc): timeout needed to allow keyboard interrupt
+</span>                <span class="c1"># http://bugs.python.org/issue8844
+</span>                <span class="c1"># 若无空闲资源，则等待
+</span>                
+                <span class="bp">self</span><span class="o">.</span><span class="n">_cond</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+        <span class="c1"># We've grabbed a slot and dropped the lock, now do the creation
+</span>        <span class="k">try</span><span class="p">:</span>
+            <span class="c1"># 创建一个资源
+</span>            
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">create</span><span class="p">()</span>
+        <span class="k">except</span> <span class="nb">Exception</span><span class="p">:</span>
+            <span class="c1"># 出错时，资源池数量恢复到创建前
+</span>            
+            <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cond</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_current_size</span> <span class="o">-=</span> <span class="mi">1</span>
+            <span class="k">raise</span>
+</code></pre></div></div>
+<p>在ConnectionContex中的__exit__方法中定义 _done， _done方法是将对象调整后，put重新放回资源池。</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="k">def</span> <span class="nf">_done</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="s">"""If the connection came from a pool, clean it up and put it back.
+    If it did not come from a pool, close it.
+    """</span>
+    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">connection</span><span class="p">:</span>
+        <span class="c1"># 是否使用资源池存储
+</span>        
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">pooled</span><span class="p">:</span>
+            <span class="c1"># 支持放回资源池
+</span>            
+            <span class="c1"># Reset the connection so it's ready for the next caller
+</span>            <span class="c1"># to grab from the pool
+</span>            <span class="bp">self</span><span class="o">.</span><span class="n">connection</span><span class="o">.</span><span class="n">reset</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">connection_pool</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">connection</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="c1"># 不支持则关闭连接
+</span>                
+                <span class="bp">self</span><span class="o">.</span><span class="n">connection</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+            <span class="k">except</span> <span class="nb">Exception</span><span class="p">:</span>
+                <span class="k">pass</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">connection</span> <span class="o">=</span> <span class="bp">None</span>
+</code></pre></div></div>
+<p>查看Transport.py文件，在使用dirver提供的四种方法，建立新方法，这些方法完全可以创建起来server.py和Client对象。</p>
+:ET

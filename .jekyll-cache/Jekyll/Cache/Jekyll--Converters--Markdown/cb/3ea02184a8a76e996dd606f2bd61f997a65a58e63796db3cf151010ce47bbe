@@ -1,0 +1,179 @@
+I"8b<h2 id="oslomessaging-rpc-client-server调用实现">oslo.messaging RPC client-server调用实现</h2>
+<p>(以rabbitmq实现为例)
+可以参看<a href="https://caesarlinsa.github.io/2020/07/07/example_for_oslo_messaging_usage/">示例代码</a></p>
+<h3 id="server端">server端</h3>
+<p>oslo.messaging server端启动时,self.dispatcher为RPCDispatcher类，RPCDispatcher在<code class="highlighter-rouge">__call__</code>中，
+完成调用endpoint中method</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_executor</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span>
+    <span class="k">return</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">listener</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transport</span><span class="o">.</span><span class="n">_listen</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">target</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">driver_base</span><span class="o">.</span><span class="n">TransportDriverError</span> <span class="k">as</span> <span class="n">ex</span><span class="p">:</span>
+    <span class="k">raise</span> <span class="n">ServerListenError</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">target</span><span class="p">,</span> <span class="n">ex</span><span class="p">)</span>
+
+<span class="bp">self</span><span class="o">.</span><span class="n">_executor</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_executor_cls</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conf</span><span class="p">,</span> <span class="n">listener</span><span class="p">,</span>
+                                    <span class="bp">self</span><span class="o">.</span><span class="n">dispatcher</span><span class="p">)</span>
+<span class="bp">self</span><span class="o">.</span><span class="n">_executor</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
+</code></pre></div></div>
+<p>因此在<code class="highlighter-rouge">self._executor.start()</code> 调用<code class="highlighter-rouge">self.listener.poll()</code></p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">start</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="bp">self</span><span class="o">.</span><span class="n">_running</span> <span class="o">=</span> <span class="bp">True</span>
+    <span class="k">while</span> <span class="bp">self</span><span class="o">.</span><span class="n">_running</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_dispatch</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">listener</span><span class="o">.</span><span class="n">poll</span><span class="p">())</span>
+</code></pre></div></div>
+<p>在poll时，对目前所有队列监听，如果监听到消息，将其初始化为AMQPIncomingMessage类，
+放入self.incoming中(原因第二节)</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">poll</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">incoming</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">incoming</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conn</span><span class="o">.</span><span class="n">consume</span><span class="p">(</span><span class="n">limit</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</code></pre></div></div>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">_dispatch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">incoming</span><span class="p">):</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="c1"># callback 为 self.dispatcher即RPCDispatcher对象
+</span>        
+        <span class="c1"># 此处调用其__call__方法， incoming为AMQPIncomingMessage类
+</span>        
+        <span class="n">reply</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">callback</span><span class="p">(</span><span class="n">incoming</span><span class="o">.</span><span class="n">ctxt</span><span class="p">,</span> <span class="n">incoming</span><span class="o">.</span><span class="n">message</span><span class="p">)</span>
+        <span class="c1"># 如果返回值非空，将结果发送
+</span>        
+        <span class="k">if</span> <span class="n">reply</span><span class="p">:</span>
+            <span class="n">incoming</span><span class="o">.</span><span class="n">reply</span><span class="p">(</span><span class="n">reply</span><span class="p">)</span>
+    <span class="k">except</span> <span class="n">messaging</span><span class="o">.</span><span class="n">ExpectedException</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="n">_LOG</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s">'Expected exception during message handling (</span><span class="si">%</span><span class="s">s)'</span> <span class="o">%</span>
+                   <span class="n">e</span><span class="o">.</span><span class="n">exc_info</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">incoming</span><span class="o">.</span><span class="n">reply</span><span class="p">(</span><span class="n">failure</span><span class="o">=</span><span class="n">e</span><span class="o">.</span><span class="n">exc_info</span><span class="p">,</span> <span class="n">log_failure</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span>
+    <span class="k">except</span> <span class="nb">Exception</span><span class="p">:</span>
+        <span class="c1"># sys.exc_info() is deleted by LOG.exception().
+</span>        
+        <span class="n">exc_info</span> <span class="o">=</span> <span class="n">sys</span><span class="o">.</span><span class="n">exc_info</span><span class="p">()</span>
+        <span class="n">_LOG</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s">"Failed to process message... skipping it."</span><span class="p">,</span>
+                   <span class="n">exc_info</span><span class="o">=</span><span class="n">exc_info</span><span class="p">)</span>
+        <span class="n">incoming</span><span class="o">.</span><span class="n">reply</span><span class="p">(</span><span class="n">failure</span><span class="o">=</span><span class="n">exc_info</span><span class="p">)</span>
+</code></pre></div></div>
+<p>以reply_q 或者msg_id将结果消息返回</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">reply</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">reply</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="n">failure</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="n">log_failure</span><span class="o">=</span><span class="bp">True</span><span class="p">):</span>
+    <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">listener</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">_get_connection</span><span class="p">()</span> <span class="k">as</span> <span class="n">conn</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_send_reply</span><span class="p">(</span><span class="n">conn</span><span class="p">,</span> <span class="n">reply</span><span class="p">,</span> <span class="n">failure</span><span class="p">,</span> <span class="n">log_failure</span><span class="o">=</span><span class="n">log_failure</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_send_reply</span><span class="p">(</span><span class="n">conn</span><span class="p">,</span> <span class="n">ending</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+</code></pre></div></div>
+<h3 id="amqpincomingmessage-放入selfincoming中">AMQPIncomingMessage 放入self.incoming中</h3>
+
+<p>在server启动时，这行<code class="highlighter-rouge">listener = self.transport._listen(self.target)</code>代码,
+创建topic 和topic.server的top Queue和 topic 的fanout Queue及相关Exchange和consumer</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># oslo\messaging\_drivers\amqpdriver.py
+</span>
+<span class="k">def</span> <span class="nf">listen</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target</span><span class="p">):</span>
+    <span class="n">conn</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_connection</span><span class="p">(</span><span class="n">pooled</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span>
+
+    <span class="n">listener</span> <span class="o">=</span> <span class="n">AMQPListener</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">conn</span><span class="p">)</span>
+
+    <span class="c1"># 创建kombu Queue，并对Queue进行消费， listener作为回调函数即调用
+</span>    
+    <span class="c1"># AMQPListener __call__方法
+</span>    
+    <span class="n">conn</span><span class="o">.</span><span class="n">declare_topic_consumer</span><span class="p">(</span><span class="n">target</span><span class="o">.</span><span class="n">topic</span><span class="p">,</span> <span class="n">listener</span><span class="p">)</span>
+    <span class="n">conn</span><span class="o">.</span><span class="n">declare_topic_consumer</span><span class="p">(</span><span class="s">'</span><span class="si">%</span><span class="s">s.</span><span class="si">%</span><span class="s">s'</span> <span class="o">%</span> <span class="p">(</span><span class="n">target</span><span class="o">.</span><span class="n">topic</span><span class="p">,</span> <span class="n">target</span><span class="o">.</span><span class="n">server</span><span class="p">),</span>
+                                <span class="n">listener</span><span class="p">)</span>
+    <span class="n">conn</span><span class="o">.</span><span class="n">declare_fanout_consumer</span><span class="p">(</span><span class="n">target</span><span class="o">.</span><span class="n">topic</span><span class="p">,</span> <span class="n">listener</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">listener</span>
+</code></pre></div></div>
+<p>在AMQPListener的<code class="highlighter-rouge">__call__</code>中，将AMQPIncomingMessage放入self.incoming中</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">):</span>
+    <span class="n">rpc_common</span><span class="o">.</span><span class="n">_safe_log</span><span class="p">(</span><span class="n">LOG</span><span class="o">.</span><span class="n">debug</span><span class="p">,</span> <span class="s">'received </span><span class="si">%</span><span class="s">s'</span><span class="p">,</span> <span class="n">message</span><span class="p">)</span>
+
+    <span class="bp">self</span><span class="o">.</span><span class="n">msg_id_cache</span><span class="o">.</span><span class="n">check_duplicate_message</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
+    <span class="n">ctxt</span> <span class="o">=</span> <span class="n">rpc_amqp</span><span class="o">.</span><span class="n">unpack_context</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conf</span><span class="p">,</span> <span class="n">message</span><span class="p">)</span>
+
+    <span class="bp">self</span><span class="o">.</span><span class="n">incoming</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">AMQPIncomingMessage</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                             <span class="n">ctxt</span><span class="o">.</span><span class="n">to_dict</span><span class="p">(),</span>
+                                             <span class="n">message</span><span class="p">,</span>
+                                             <span class="n">ctxt</span><span class="o">.</span><span class="n">msg_id</span><span class="p">,</span>
+                                             <span class="n">ctxt</span><span class="o">.</span><span class="n">reply_q</span><span class="p">))</span>
+</code></pre></div></div>
+<h3 id="client端">client端</h3>
+
+<p>RPCClient，发送消息。call调用时，发送前会使用msg_id创建一个Queue并监听</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">transport</span> <span class="o">=</span> <span class="n">oslo</span><span class="o">.</span><span class="n">messaging</span><span class="o">.</span><span class="n">get_transport</span><span class="p">(</span><span class="n">CONF</span><span class="p">)</span>
+<span class="n">target</span> <span class="o">=</span> <span class="n">oslo</span><span class="o">.</span><span class="n">messaging</span><span class="o">.</span><span class="n">Target</span><span class="p">(</span><span class="n">topic</span><span class="o">=</span><span class="s">"rpc"</span><span class="p">,</span> <span class="n">server</span><span class="o">=</span><span class="s">"server"</span><span class="p">)</span>
+<span class="n">RPCClient</span> <span class="o">=</span> <span class="n">oslo</span><span class="o">.</span><span class="n">messaging</span><span class="o">.</span><span class="n">RPCClient</span><span class="p">(</span><span class="n">transport</span><span class="p">,</span> <span class="n">target</span><span class="p">)</span>
+<span class="n">RPCClient</span><span class="o">.</span><span class="n">call</span><span class="p">({},</span> <span class="s">"test"</span><span class="p">)</span>
+</code></pre></div></div>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># oslo\messaging\rpc\client.py
+</span>
+<span class="n">result</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transport</span><span class="o">.</span><span class="n">_send</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">target</span><span class="p">,</span> <span class="n">msg_ctxt</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span>
+                              <span class="n">wait_for_reply</span><span class="o">=</span><span class="bp">True</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="n">timeout</span><span class="p">)</span>
+</code></pre></div></div>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># oslo\messaging\_drivers\amqpdriver.py
+</span>
+<span class="k">def</span> <span class="nf">send</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">ctxt</span><span class="p">,</span> <span class="n">message</span><span class="p">,</span> <span class="n">wait_for_reply</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="bp">None</span><span class="p">):</span>
+    <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_send</span><span class="p">(</span><span class="n">target</span><span class="p">,</span> <span class="n">ctxt</span><span class="p">,</span> <span class="n">message</span><span class="p">,</span> <span class="n">wait_for_reply</span><span class="p">,</span> <span class="n">timeout</span><span class="p">)</span>
+</code></pre></div></div>
+<p>在_send方法中，<code class="highlighter-rouge">msg.update({'_reply_q': self._get_reply_q()})</code> 中初始化ReplyWaiter对象</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">ReplyWaiter</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">conf</span><span class="p">,</span> <span class="n">reply_q</span><span class="p">,</span> <span class="n">conn</span><span class="p">,</span> <span class="n">allowed_remote_exmods</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conf</span> <span class="o">=</span> <span class="n">conf</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conn</span> <span class="o">=</span> <span class="n">conn</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">reply_q</span> <span class="o">=</span> <span class="n">reply_q</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">allowed_remote_exmods</span> <span class="o">=</span> <span class="n">allowed_remote_exmods</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">conn_lock</span> <span class="o">=</span> <span class="n">threading</span><span class="o">.</span><span class="n">Lock</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">incoming</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">msg_id_cache</span> <span class="o">=</span> <span class="n">rpc_amqp</span><span class="o">.</span><span class="n">_MsgIdCache</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">waiters</span> <span class="o">=</span> <span class="n">ReplyWaiters</span><span class="p">()</span>
+        <span class="c1"># 一个direct 队列和consumer，回调函数为 此类的__call__方法
+</span>        
+        <span class="n">conn</span><span class="o">.</span><span class="n">declare_direct_consumer</span><span class="p">(</span><span class="n">reply_q</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">message</span><span class="p">):</span>
+        <span class="c1"># 返回数据存入self.incoming中
+</span>        
+        <span class="bp">self</span><span class="o">.</span><span class="n">incoming</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
+</code></pre></div></div>
+<p>RPC远程调用后，等待返回结果, 并返回</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">if</span> <span class="n">wait_for_reply</span><span class="p">:</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_waiter</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">msg_id</span><span class="p">,</span> <span class="n">timeout</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="nb">Exception</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="n">result</span>
+    <span class="k">return</span> <span class="n">result</span>
+</code></pre></div></div>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># oslo/messaging/_drivers/amqpdriver.py ReplyWaiter
+</span>
+<span class="k">def</span> <span class="nf">wait</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg_id</span><span class="p">,</span> <span class="n">timeout</span><span class="p">):</span>
+    <span class="n">final_reply</span> <span class="o">=</span> <span class="bp">None</span>
+    <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">conn_lock</span><span class="o">.</span><span class="n">acquire</span><span class="p">(</span><span class="bp">False</span><span class="p">):</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+                    <span class="n">reply</span><span class="p">,</span> <span class="n">ending</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_poll_connection</span><span class="p">(</span><span class="n">msg_id</span><span class="p">,</span> <span class="n">timeout</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">reply</span><span class="p">:</span>
+                        <span class="n">final_reply</span> <span class="o">=</span> <span class="n">reply</span>
+                    <span class="k">elif</span> <span class="n">ending</span><span class="p">:</span>
+                        <span class="k">return</span> <span class="n">final_reply</span>
+            <span class="k">finally</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">conn_lock</span><span class="o">.</span><span class="n">release</span><span class="p">()</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">waiters</span><span class="o">.</span><span class="n">wake_all</span><span class="p">(</span><span class="n">msg_id</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">reply</span><span class="p">,</span> <span class="n">ending</span><span class="p">,</span> <span class="n">trylock</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_poll_queue</span><span class="p">(</span><span class="n">msg_id</span><span class="p">,</span> <span class="n">timeout</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">trylock</span><span class="p">:</span>
+                <span class="k">continue</span>
+            <span class="k">if</span> <span class="n">reply</span><span class="p">:</span>
+                <span class="n">final_reply</span> <span class="o">=</span> <span class="n">reply</span>
+            <span class="k">elif</span> <span class="n">ending</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">final_reply</span>
+</code></pre></div></div>
+<p>reply_xxx 队列Exchange <code class="highlighter-rouge">auto-delete = True</code>，所以当finally中 <code class="highlighter-rouge">self.conn_lock.release()</code>，
+连接关闭时，消息队列全部清除</p>
+:ET
